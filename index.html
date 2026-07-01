@@ -71,6 +71,7 @@ body {
 .col-total {
   font-family: 'Inter', sans-serif; font-weight: 700;
   fill: #404F54; font-size: 12px;
+  opacity: 0;
 }
 
 
@@ -86,8 +87,8 @@ body {
 <div class="viz-container">
   <div class="viz-header">
     <div class="viz-kicker">Signal Cleveland</div>
-    <div class="viz-heading">Disciplinary hearings per year</div>
-    <div class="viz-subheading">Number of Cleveland Police Department disciplinary hearings held annually.</div>
+    <div class="viz-heading">How many disciplinary cases per year, 2017-2025</div>
+    <div class="viz-subheading">Each bar represents the number of Cleveland Police Department disciplinary hearings held during that year.</div>
   </div>
 
   <div class="chart-area">
@@ -177,6 +178,7 @@ function render() {
     rect.setAttribute('height', bH);
     rect.setAttribute('fill', BAR_COLOR);
     rect.setAttribute('rx', 1);
+    rect.setAttribute('class', 'seg');
     g.appendChild(rect);
 
     // Count label above bar
@@ -197,10 +199,81 @@ function render() {
     xLabel.textContent = d.year;
     g.appendChild(xLabel);
   });
+
+  return { svg, g, iW, iH };
 }
 
-render();
-window.addEventListener('resize', render);
+// ── BAR-REVEAL ANIMATION ───────────────────────────────────────────────────────
+function setupClip(svg, g, iW, iH) {
+  const ns = 'http://www.w3.org/2000/svg';
+  const defs = document.createElementNS(ns, 'defs');
+  svg.appendChild(defs);
+
+  const clipPath = document.createElementNS(ns, 'clipPath');
+  clipPath.setAttribute('id', 'bars-reveal');
+  defs.appendChild(clipPath);
+
+  const clipRect = document.createElementNS(ns, 'rect');
+  clipRect.setAttribute('x', 0);
+  clipRect.setAttribute('y', iH);
+  clipRect.setAttribute('width', iW);
+  clipRect.setAttribute('height', 0);
+  clipPath.appendChild(clipRect);
+
+  g.querySelectorAll('.seg').forEach(r => r.setAttribute('clip-path', 'url(#bars-reveal)'));
+  return clipRect;
+}
+
+function animateClip(clipRect, iH) {
+  const duration = 1600;
+  const start = performance.now();
+  const ease = t => {
+    const c1 = 1.4, c3 = c1 + 1;
+    return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+  };
+  function frame(now) {
+    const t = Math.min((now - start) / duration, 1);
+    const h = iH * ease(t);
+    clipRect.setAttribute('y', iH - h);
+    clipRect.setAttribute('height', h);
+
+    const fadeStart = 0.5, fadeEnd = 0.85;
+    const labelOpacity = Math.min(Math.max((t - fadeStart) / (fadeEnd - fadeStart), 0), 1);
+    document.querySelectorAll('.col-total').forEach(l => l.style.opacity = labelOpacity);
+
+    if (t < 1) {
+      requestAnimationFrame(frame);
+    }
+  }
+  requestAnimationFrame(frame);
+}
+
+let chartAnimated = false;
+let current;
+
+function draw() {
+  const { svg, g, iW, iH } = render();
+  const clipRect = setupClip(svg, g, iW, iH);
+
+  if (chartAnimated) {
+    clipRect.setAttribute('y', 0);
+    clipRect.setAttribute('height', iH);
+    svg.querySelectorAll('.col-total').forEach(l => l.style.opacity = '1');
+  }
+
+  current = { clipRect, iH };
+}
+
+draw();
+window.addEventListener('resize', draw);
+
+const observer = new IntersectionObserver(entries => {
+  if (entries[0].isIntersecting && !chartAnimated) {
+    chartAnimated = true;
+    animateClip(current.clipRect, current.iH);
+  }
+}, { threshold: 0 });
+observer.observe(document.querySelector('.chart-area'));
 </script>
 </body>
 </html>
