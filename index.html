@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>CPD Hearings Per Year</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Roboto+Condensed:wght@400;500;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Roboto+Condensed:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body {
@@ -101,15 +101,15 @@ body {
 <script>
 // ── DATA ─────────────────────────────────────────────────────────────────────
 const data = [
-  { year: 2017, hearings: 152 },
-  { year: 2018, hearings: 197 },
-  { year: 2019, hearings: 146 },
-  { year: 2020, hearings: 212 },
-  { year: 2021, hearings: 217 },
-  { year: 2022, hearings: 155 },
-  { year: 2023, hearings: 250 },
-  { year: 2024, hearings: 128 },
-  { year: 2025, hearings: 109 },
+  { year: 2017, hearings: 165 },
+  { year: 2018, hearings: 213 },
+  { year: 2019, hearings: 174 },
+  { year: 2020, hearings: 238 },
+  { year: 2021, hearings: 257 },
+  { year: 2022, hearings: 184 },
+  { year: 2023, hearings: 258 },
+  { year: 2024, hearings: 138 },
+  { year: 2025, hearings: 116 },
 ];
 
 // ── CONFIG ────────────────────────────────────────────────────────────────────
@@ -127,7 +127,7 @@ function render() {
 
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
   svg.setAttribute('width', W);
-  svg.setAttribute('setAttribute', H);
+  svg.setAttribute('height', H);
   svg.innerHTML = '';
 
   const ns = 'http://www.w3.org/2000/svg';
@@ -135,7 +135,7 @@ function render() {
   g.setAttribute('transform', `translate(${MARGIN.left},${MARGIN.top})`);
   svg.appendChild(g);
 
-  const nice     = 250;
+  const nice     = 300;
   const tickStep = 50;
   const xStep    = iW / data.length;
   const barW     = xStep * 0.55;
@@ -154,7 +154,7 @@ function render() {
   g.appendChild(yAxisLabel);
 
   // Gridlines + y-ticks
-  for (let t = 0; t <= 5; t++) {
+  for (let t = 0; t <= 6; t++) {
     const val = t * tickStep;
     const y   = iH - (val / nice) * iH;
 
@@ -275,5 +275,7 @@ const observer = new IntersectionObserver(entries => {
 }, { threshold: 0 });
 observer.observe(document.querySelector('.chart-area'));
 </script>
+<script src="https://pym.nprapps.com/pym.v1.min.js"></script>
+<script>new pym.Child({ polling: 500 });</script>
 </body>
 </html>
