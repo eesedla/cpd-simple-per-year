@@ -59,8 +59,41 @@ body {
   line-height: 1.5;
 }
 
+/* Legend — space is reserved from first paint so the staffing lines can fade
+   in later without shifting the chart (and without the embed height jumping). */
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  padding: 0 20px;
+  min-height: 20px;
+  opacity: 0;
+  transition: opacity 240ms ease;
+}
+.legend.visible { opacity: 1; }
+.legend-chip {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-family: 'Roboto Condensed', 'Arial Narrow', sans-serif;
+  font-weight: 500;
+  font-size: 0.8rem;
+  color: #404F54;
+}
+.legend-chip .swatch {
+  width: 10px; height: 10px; border-radius: 2px;
+  border: 1px solid rgba(64,79,84,0.28);
+}
+/* Line series get a line-key rather than a block, so the legend states the
+   mark the reader is actually looking for. */
+.legend-chip .line-key {
+  width: 16px; height: 0;
+  border-top-width: 2px; border-top-style: solid;
+  border-radius: 2px;
+}
+
 /* Chart */
-.chart-area { padding: 18px 14px 6px; position: relative; }
+.chart-area { padding: 10px 14px 6px; position: relative; }
 #chart { width: 100%; height: auto; display: block; }
 .axis-text {
   font-family: 'Inter', sans-serif; fill: #404F54; font-size: 12px;
@@ -72,7 +105,47 @@ body {
   fill: #404F54; font-size: 12px;
   opacity: 0;
 }
+/* Axis label + per-point value. Text wears ink, never the series color —
+   identity comes from the colored dot beside it. */
+.band-label { fill: #404F54; opacity: 0.7; font-size: 12px; font-family: 'Inter', sans-serif; }
+.line-val {
+  font-family: 'Inter', sans-serif; font-weight: 700;
+  fill: #404F54; font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.crosshair { stroke: #404F54; stroke-opacity: 0.3; stroke-width: 1; }
 
+/* Tooltip (canonical .bar-tooltip per STYLE.md) */
+.bar-tooltip {
+  position: fixed;
+  pointer-events: none;
+  background: #404F54;
+  color: #fff;
+  font-family: 'Inter', sans-serif;
+  font-size: 0.75rem;
+  padding: 12px 16px;
+  border-radius: 2px;
+  max-width: 280px;
+  min-width: 180px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+  opacity: 0;
+  transition: opacity 120ms ease;
+  z-index: 10;
+}
+.bar-tooltip.visible { opacity: 1; }
+.bar-tooltip .tt-title { font-weight: 700; font-size: 13px; margin-bottom: 6px; }
+.bar-tooltip .tt-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 14px; margin-top: 4px;
+}
+.bar-tooltip .tt-key { display: flex; align-items: center; gap: 7px; }
+.bar-tooltip .tt-dot { width: 9px; height: 9px; border-radius: 2px; flex: none; }
+.bar-tooltip .tt-val { font-weight: 600; font-variant-numeric: tabular-nums; }
+.bar-tooltip .tt-sub {
+  font-size: 0.68rem; opacity: 0.55;
+  margin-top: 7px; padding-top: 6px;
+  border-top: 1px solid rgba(255,255,255,0.18);
+}
 
 /* Source */
 .viz-source {
@@ -87,15 +160,18 @@ body {
   <div class="viz-header">
     <div class="viz-kicker">Signal Cleveland</div>
     <div class="viz-heading">Disciplinary cases per year, 2017-2025</div>
-    <div class="viz-subheading">This chart shows how many disciplinary hearings the department held for Cleveland officers per year. Some officers had more than one hearing.</div>
+    <div class="viz-subheading">This chart shows how many disciplinary hearings the department held for Cleveland officers per year. Some officers had more than one hearing. The line shows the department's total headcount — sworn officers plus non-sworn employees — over the same period, on the same scale as the bars, so the hearing counts can be read against the size of the workforce they came from.</div>
   </div>
+
+  <div class="legend" id="legend"></div>
 
   <div class="chart-area">
     <svg id="chart"></svg>
   </div>
 
-
 </div>
+
+<div class="bar-tooltip" id="tooltip"></div>
 
 <script>
 // ── DATA ─────────────────────────────────────────────────────────────────────
@@ -111,168 +187,455 @@ const data = [
   { year: 2025, hearings: 116 },
 ];
 
+// Headcount by year. Keyed by year (not a parallel array) so it can't silently
+// misalign if build_data.py changes the bar window — only years present in
+// `data` above get plotted. 2026 is here ready for when that window extends.
+const STAFFING = {
+  2017: { sworn: 1485, nonSworn: 227 },
+  2018: { sworn: 1471, nonSworn: 214 },
+  2019: { sworn: 1598, nonSworn: 238 },
+  2020: { sworn: 1623, nonSworn: 259 },
+  2021: { sworn: 1562, nonSworn: 245 },
+  2022: { sworn: 1472, nonSworn: 225 },
+  2023: { sworn: 1313, nonSworn: 214 },
+  2024: { sworn: 1185, nonSworn: 205 },
+  2025: { sworn: 1218, nonSworn: 190 },
+  2026: { sworn: 1251, nonSworn: 189 },
+};
+Object.values(STAFFING).forEach(v => { v.total = v.sworn + v.nonSworn; });
+
 // ── CONFIG ────────────────────────────────────────────────────────────────────
 const BAR_COLOR = '#23685b';
-const MARGIN        = { top: 24, right: 16, bottom: 36, left: 24 };
-const SVG_HEIGHT    = 320;
+// The line hue is a STYLE.md token, checked with the dataviz palette
+// validator against the teal bars: orange clears both the colorblind and the
+// normal-vision separation floors (dE 12.1 protan, 29.7 normal).
+const SERIES = [
+  { key: 'total', label: 'Total department employees', color: '#e56430' },
+];
+
+// top margin + height are set by the highest point label: the 2020 peak (1,882)
+// sits at 94% of the 2,000 axis, and its label has to clear the top gridline.
+// right margin is small because point labels are centred, not hung off the end.
+const MARGIN     = { top: 20, right: 24, bottom: 36, left: 64 };
+const SVG_HEIGHT = 440;
+
+// ONE y-axis for every series. The axis max is what animates: it opens from
+// AXIS_MAX_BARS (where the bars fill the frame) to AXIS_MAX_FULL (where the
+// headcount lines fit), so the bars shrink because the scale grew — not
+// because they are on a second, arbitrarily aligned axis. A dual-axis version
+// of this chart would invent a correlation between hearings and headcount
+// that isn't in the data.
+const AXIS_MAX_BARS = 300;
+const AXIS_MAX_FULL = 2000;
+// Two tick sets, crossfaded during the rescale: fine ticks while the bars own
+// the frame, coarse ticks once the lines are in.
+const TICKS_BARS = [0, 50, 100, 150, 200, 250, 300];
+const TICKS_FULL = [0, 500, 1000, 1500, 2000];
+
+// How long the bars take to grow. The rescale that follows has no duration of
+// its own — it is driven by scroll (see the ANIMATION section).
+const T_GROW = 1600;
+
+const ns = 'http://www.w3.org/2000/svg';
+const fmt = n => n.toLocaleString('en-US');
+const clamp01 = t => Math.min(Math.max(t, 0), 1);
+const lerp = (a, b, t) => a + (b - a) * t;
+
+function el(tag, attrs) {
+  const e = document.createElementNS(ns, tag);
+  if (attrs) for (const k in attrs) e.setAttribute(k, attrs[k]);
+  return e;
+}
+
+const prefersReducedMotion =
+  window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 // ── RENDER ────────────────────────────────────────────────────────────────────
-function render() {
+// `morph` 0 -> 1 interpolates the whole layout: at 0 the bars own the full plot
+// height (the chart as it first appears); at 1 they have shrunk into a lower
+// band and the staffing panel occupies the space above. Everything in the bar
+// panel is a function of morph, so one number drives the transition.
+let geom = null;
+
+function render(state) {
+  const { morph, lineT, endT, revealH } = state;
+
   const svg = document.getElementById('chart');
   const W   = svg.parentElement.clientWidth;
-  const H        = SVG_HEIGHT;
-  const iW       = W - MARGIN.left - MARGIN.right;
-  const iH       = H - MARGIN.top  - MARGIN.bottom;
+  const H   = SVG_HEIGHT;
+  const iW  = W - MARGIN.left - MARGIN.right;
+  const iH  = H - MARGIN.top  - MARGIN.bottom;
 
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
   svg.setAttribute('width', W);
   svg.setAttribute('height', H);
   svg.innerHTML = '';
 
-  const ns = 'http://www.w3.org/2000/svg';
-  const g  = document.createElementNS(ns, 'g');
-  g.setAttribute('transform', `translate(${MARGIN.left},${MARGIN.top})`);
+  const g = el('g', { transform: `translate(${MARGIN.left},${MARGIN.top})` });
   svg.appendChild(g);
 
-  const nice     = 300;
-  const tickStep = 50;
-  const xStep    = iW / data.length;
-  const barW     = xStep * 0.55;
-  const barPad   = (xStep - barW) / 2;
+  // The single shared scale. Only its max moves.
+  const axisMax = lerp(AXIS_MAX_BARS, AXIS_MAX_FULL, morph);
+  const y = v => iH - (v / axisMax) * iH;
 
-  // Y-axis label
-  const yAxisLabel = document.createElementNS(ns, 'text');
-  yAxisLabel.setAttribute('transform', `rotate(-90)`);
-  yAxisLabel.setAttribute('x', -(iH / 2));
-  yAxisLabel.setAttribute('y', -MARGIN.left + 14);
-  yAxisLabel.setAttribute('text-anchor', 'middle');
-  yAxisLabel.setAttribute('class', 'ytick');
-  yAxisLabel.style.opacity = '0.7';
-  yAxisLabel.style.fontSize = '12px';
-  yAxisLabel.textContent = 'Number of hearings';
-  g.appendChild(yAxisLabel);
+  const xStep   = iW / data.length;
+  const barW    = xStep * 0.55;
+  const barPad  = (xStep - barW) / 2;
+  const xCenter = i => i * xStep + barPad + barW / 2;
 
-  // Gridlines + y-ticks
-  for (let t = 0; t <= 6; t++) {
-    const val = t * tickStep;
-    const y   = iH - (val / nice) * iH;
+  // ── Gridlines + ticks (two sets, crossfaded across the rescale) ───────────
+  const tickSets = [
+    { vals: TICKS_BARS, op: 1 - clamp01(morph * 2) },
+    { vals: TICKS_FULL, op: clamp01((morph - 0.35) / 0.65) },
+  ];
+  tickSets.forEach(set => {
+    if (set.op < 0.01) return;
+    set.vals.forEach(t => {
+      const yv = y(t);
+      if (yv < -MARGIN.top || yv > iH + 1) return;
+      g.appendChild(el('line', {
+        x1: 0, x2: iW, y1: yv, y2: yv, class: 'gridline', opacity: set.op,
+      }));
+      const lbl = el('text', {
+        x: -10, y: yv + 4, 'text-anchor': 'end', class: 'ytick', opacity: set.op,
+      });
+      lbl.textContent = fmt(t);
+      g.appendChild(lbl);
+    });
+  });
 
-    const line = document.createElementNS(ns, 'line');
-    line.setAttribute('x1', 0); line.setAttribute('x2', iW);
-    line.setAttribute('y1', y); line.setAttribute('y2', y);
-    line.setAttribute('class', 'gridline');
-    g.appendChild(line);
+  const axisLabel = el('text', {
+    transform: 'rotate(-90)',
+    x: -(iH / 2), y: -MARGIN.left + 12,
+    'text-anchor': 'middle', class: 'band-label',
+  });
+  axisLabel.textContent = 'Hearings and employees';
+  g.appendChild(axisLabel);
+
+  // ── Bars ──────────────────────────────────────────────────────────────────
+  // Reveal clip for the initial grow: revealH is pixels up from the baseline,
+  // null once fully revealed.
+  let clipUrl = null;
+  if (revealH !== null) {
+    const defs = el('defs');
+    const cp   = el('clipPath', { id: 'bars-reveal' });
+    cp.appendChild(el('rect', { x: 0, y: iH - revealH, width: iW, height: Math.max(revealH, 0) }));
+    defs.appendChild(cp);
+    g.appendChild(defs);
+    clipUrl = 'url(#bars-reveal)';
   }
 
-  // Bars + x-labels
   data.forEach((d, i) => {
     const x  = i * xStep + barPad;
-    const bH = (d.hearings / nice) * iH;
-    const y  = iH - bH;
+    const yt = y(d.hearings);
 
-    const rect = document.createElementNS(ns, 'rect');
-    rect.setAttribute('x', x);
-    rect.setAttribute('y', y);
-    rect.setAttribute('width', barW);
-    rect.setAttribute('height', bH);
-    rect.setAttribute('fill', BAR_COLOR);
-    rect.setAttribute('rx', 1);
-    rect.setAttribute('class', 'seg');
+    const rect = el('rect', {
+      x, y: yt, width: barW, height: Math.max(iH - yt, 0),
+      fill: BAR_COLOR, rx: 1, class: 'seg',
+    });
+    if (clipUrl) rect.setAttribute('clip-path', clipUrl);
     g.appendChild(rect);
 
-    // Count label above bar
-    const barLabel = document.createElementNS(ns, 'text');
-    barLabel.setAttribute('x', x + barW / 2);
-    barLabel.setAttribute('y', y - 5);
-    barLabel.setAttribute('text-anchor', 'middle');
-    barLabel.setAttribute('class', 'col-total');
+    // Bar values stay on top of the bars at every scale, including once the
+    // bars have shrunk — they ride the bar top, so they travel down with it.
+    const barLabel = el('text', {
+      x: x + barW / 2, y: yt - 5, 'text-anchor': 'middle', class: 'col-total',
+    });
     barLabel.textContent = d.hearings;
     g.appendChild(barLabel);
 
-    // X-axis year label
-    const xLabel = document.createElementNS(ns, 'text');
-    xLabel.setAttribute('x', x + barW / 2);
-    xLabel.setAttribute('y', iH + 22);
-    xLabel.setAttribute('text-anchor', 'middle');
-    xLabel.setAttribute('class', 'axis-text');
+    const xLabel = el('text', {
+      x: x + barW / 2, y: iH + 22, 'text-anchor': 'middle', class: 'axis-text',
+    });
     xLabel.textContent = d.year;
     g.appendChild(xLabel);
   });
 
-  return { svg, g, iW, iH };
+  // ── Headcount lines (same scale, same frame) ──────────────────────────────
+  if (morph > 0.001) {
+    // No left-to-right wipe here: the line sits above the top of the plot until
+    // the axis max passes ~1,882, so a wipe would run off-screen and the line
+    // would pop in late. The rescale itself is the motion — the line descends
+    // into frame as the axis opens — so it only needs to fade in.
+    const panel = el('g', { opacity: lineT });
+    g.appendChild(panel);
+
+    const lines = el('g');
+    panel.appendChild(lines);
+
+    SERIES.forEach(s => {
+      const pts = data
+        .map((d, i) => (STAFFING[d.year] ? `${xCenter(i)},${y(STAFFING[d.year][s.key])}` : null))
+        .filter(Boolean)
+        .join(' ');
+      if (!pts) return;
+      lines.appendChild(el('polyline', {
+        points: pts, fill: 'none', stroke: s.color,
+        'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round',
+      }));
+    });
+
+    // A marker at every year, labelled with that year's total. Each dot carries a
+    // 2px surface-coloured ring so it stays legible where it sits on the line.
+    if (endT > 0.001) {
+      const marks = el('g', { opacity: clamp01(endT) });
+      panel.appendChild(marks);
+      const colour = SERIES[0].color;
+
+      data.forEach((d, i) => {
+        const st = STAFFING[d.year];
+        if (!st) return;
+        const cx = xCenter(i);
+        const cy = y(st.total);
+
+        marks.appendChild(el('circle', {
+          cx, cy, r: 4, fill: colour, stroke: '#fcfcfb', 'stroke-width': 2,
+        }));
+
+        // Labels ride above their dot; if a point ever sits too high to clear
+        // the plot edge, that one flips below instead of being clipped.
+        const above = cy - 21 > 0;
+        const v = el('text', {
+          x: cx, y: above ? cy - 12 : cy + 20,
+          'text-anchor': 'middle', class: 'line-val',
+        });
+        v.textContent = fmt(st.total);
+        marks.appendChild(v);
+      });
+    }
+  }
+
+  geom = { svg, g, iW, iH, xStep, xCenter, y };
+  return geom;
 }
 
-// ── BAR-REVEAL ANIMATION ───────────────────────────────────────────────────────
-function setupClip(svg, g, iW, iH) {
-  const ns = 'http://www.w3.org/2000/svg';
-  const defs = document.createElementNS(ns, 'defs');
-  svg.appendChild(defs);
+// ── HOVER LAYER ───────────────────────────────────────────────────────────────
+// On the shared scale the bars are short, so the tooltip is how a reader gets
+// exact figures for a year — including the sworn / non-sworn split behind the
+// combined line. The end label and axis ticks carry the rest.
+const tooltip = document.getElementById('tooltip');
+let hoverOn = false;
 
-  const clipPath = document.createElementNS(ns, 'clipPath');
-  clipPath.setAttribute('id', 'bars-reveal');
-  defs.appendChild(clipPath);
+function buildHover() {
+  if (!hoverOn || !geom) return;
+  const { g, iW, iH, xStep, xCenter } = geom;
 
-  const clipRect = document.createElementNS(ns, 'rect');
-  clipRect.setAttribute('x', 0);
-  clipRect.setAttribute('y', iH);
-  clipRect.setAttribute('width', iW);
-  clipRect.setAttribute('height', 0);
-  clipPath.appendChild(clipRect);
+  const hit = el('g');
+  g.appendChild(hit);
 
-  g.querySelectorAll('.seg').forEach(r => r.setAttribute('clip-path', 'url(#bars-reveal)'));
-  return clipRect;
+  data.forEach((d, i) => {
+    const cx = xCenter(i);
+    const band = el('rect', {
+      x: i * xStep, y: -MARGIN.top, width: xStep, height: iH + MARGIN.top,
+      fill: 'transparent', style: 'cursor:pointer',
+    });
+
+    band.addEventListener('mouseenter', () => {
+      const cross = el('line', {
+        x1: cx, x2: cx, y1: -MARGIN.top + 4, y2: iH,
+        class: 'crosshair', 'data-cross': '1',
+      });
+      g.insertBefore(cross, hit);
+
+      const s = STAFFING[d.year];
+      let rows = `<div class="tt-row"><span class="tt-key"><span class="tt-dot" style="background:${BAR_COLOR}"></span>Hearings</span><span class="tt-val">${fmt(d.hearings)}</span></div>`;
+      if (s && curMorph > 0.5) {
+        SERIES.forEach(se => {
+          rows += `<div class="tt-row"><span class="tt-key"><span class="tt-dot" style="background:${se.color}"></span>${se.label}</span><span class="tt-val">${fmt(s[se.key])}</span></div>`;
+        });
+      }
+      if (s && curMorph > 0.5) {
+        rows += `<div class="tt-sub">${fmt(s.sworn)} sworn &middot; ${fmt(s.nonSworn)} non-sworn</div>`;
+      }
+      tooltip.innerHTML = `<div class="tt-title">${d.year}</div>${rows}`;
+      tooltip.classList.add('visible');
+    });
+
+    band.addEventListener('mousemove', evt => {
+      const r = tooltip.getBoundingClientRect();
+      let left = evt.clientX + 16;
+      if (left + r.width > window.innerWidth - 8) left = evt.clientX - r.width - 16;
+      let top = evt.clientY - r.height / 2;
+      top = Math.max(8, Math.min(top, window.innerHeight - r.height - 8));
+      tooltip.style.left = left + 'px';
+      tooltip.style.top  = top + 'px';
+    });
+
+    band.addEventListener('mouseleave', () => {
+      tooltip.classList.remove('visible');
+      g.querySelectorAll('[data-cross]').forEach(c => c.remove());
+    });
+
+    hit.appendChild(band);
+  });
 }
 
-function animateClip(clipRect, iH) {
-  const duration = 1600;
-  const start = performance.now();
-  const ease = t => {
-    const c1 = 1.4, c3 = c1 + 1;
-    return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+// ── LEGEND ────────────────────────────────────────────────────────────────────
+function buildLegend() {
+  const box = document.getElementById('legend');
+  box.innerHTML = '';
+  const chip = (markup, label) => {
+    const c = document.createElement('div');
+    c.className = 'legend-chip';
+    c.innerHTML = `${markup}<span>${label}</span>`;
+    box.appendChild(c);
   };
+  chip(`<span class="swatch" style="background:${BAR_COLOR}"></span>`, 'Disciplinary hearings');
+  SERIES.forEach(s =>
+    chip(`<span class="line-key" style="border-top-color:${s.color}"></span>`, s.label));
+}
+
+// ── ANIMATION ─────────────────────────────────────────────────────────────────
+// Two separate mechanisms, deliberately:
+//
+//   1. The bars grow once, on a timer, the first time the chart is seen.
+//   2. The rescale (bars shrink, headcount line descends in) is driven by
+//      SCROLL, and is reversible — scroll back up and the line retracts,
+//      leaving the bars alone at the 0-300 scale.
+//
+// Inside the WordPress embed this page is an iframe, so there is no scroll
+// event to listen to: nothing scrolls inside the frame, the frame itself moves
+// through the parent's viewport. IntersectionObserver is the one signal that
+// crosses that boundary, so scroll position is derived from how much of the
+// chart is currently clipped, using a dense threshold list for resolution.
+const easeOutBack = t => {
+  const c1 = 1.4, c3 = c1 + 1;
+  return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+};
+
+const MORPH_HOLD_MS = 500;   // bars hold for a beat before the line may enter
+const MORPH_EASE    = 0.14;  // per-frame approach to the scroll-derived target
+
+let barsRevealH  = 0;        // px revealed up from the baseline; null = done
+let barLabelOp   = 0;
+let barsStarted  = false;
+let barsDone     = false;
+let barsDoneAt   = 0;
+let userScrolled = false;    // the line waits for a real scroll, not just visibility
+let targetMorph  = 0;        // where scroll says the morph should be
+let curMorph     = 0;        // where it actually is (eased toward target)
+let lastProgress = 0;
+let morphRaf     = null;
+let holdTimer    = null;
+
+function paint(interactive) {
+  render({
+    morph:   curMorph,
+    lineT:   clamp01((curMorph - 0.12) / 0.5),
+    endT:    clamp01((curMorph - 0.75) / 0.25),
+    revealH: barsRevealH,
+  });
+  document.querySelectorAll('.col-total').forEach(l => (l.style.opacity = barLabelOp));
+  document.getElementById('legend').classList.toggle('visible', curMorph > 0.05);
+  if (interactive && hoverOn) buildHover();
+}
+
+// ── 1. Bar grow (one-shot) ───────────────────────────────────────────────────
+function runBarGrow() {
+  const fullH = SVG_HEIGHT - MARGIN.top - MARGIN.bottom;
+  const start = performance.now();
   function frame(now) {
-    const t = Math.min((now - start) / duration, 1);
-    const h = iH * ease(t);
-    clipRect.setAttribute('y', iH - h);
-    clipRect.setAttribute('height', h);
-
-    const fadeStart = 0.5, fadeEnd = 0.85;
-    const labelOpacity = Math.min(Math.max((t - fadeStart) / (fadeEnd - fadeStart), 0), 1);
-    document.querySelectorAll('.col-total').forEach(l => l.style.opacity = labelOpacity);
-
+    const t = Math.min((now - start) / T_GROW, 1);
+    barsRevealH = fullH * easeOutBack(t);
+    barLabelOp  = clamp01((t - 0.5) / 0.35);
+    paint(false);
     if (t < 1) {
       requestAnimationFrame(frame);
+    } else {
+      barsRevealH = null;
+      barLabelOp  = 1;
+      barsDone    = true;
+      barsDoneAt  = performance.now();
+      hoverOn     = true;
+      paint(true);
+      startMorphLoop();
     }
   }
   requestAnimationFrame(frame);
 }
 
-let chartAnimated = false;
-let current;
-
-function draw() {
-  const { svg, g, iW, iH } = render();
-  const clipRect = setupClip(svg, g, iW, iH);
-
-  if (chartAnimated) {
-    clipRect.setAttribute('y', 0);
-    clipRect.setAttribute('height', iH);
-    svg.querySelectorAll('.col-total').forEach(l => l.style.opacity = '1');
-  }
-
-  current = { clipRect, iH };
+// ── 2. Scroll-driven rescale (reversible) ────────────────────────────────────
+// How much of the chart is cut off, and at which edge, stands in for scroll
+// position. Clipped at the BOTTOM means the reader is still arriving (or has
+// scrolled back up) -> the morph tracks how much is showing. Clipped only at
+// the TOP means they have scrolled past it -> hold at full rather than
+// retracting on the way out.
+function progressFrom(entry) {
+  if (!entry.isIntersecting) return lastProgress;
+  const b = entry.boundingClientRect, i = entry.intersectionRect;
+  if (!b.height) return lastProgress;
+  const clippedTop    = i.top - b.top;
+  const clippedBottom = b.bottom - i.bottom;
+  if (clippedTop > 1 && clippedBottom <= 1) return 1;
+  return clamp01((i.height / b.height - 0.4) / 0.45);
 }
 
-draw();
-window.addEventListener('resize', draw);
+function startMorphLoop() {
+  if (morphRaf !== null || !barsDone) return;
 
-const observer = new IntersectionObserver(entries => {
-  if (entries[0].isIntersecting && !chartAnimated) {
-    chartAnimated = true;
-    animateClip(current.clipRect, current.iH);
+  const waited = performance.now() - barsDoneAt;
+  if (waited < MORPH_HOLD_MS) {
+    if (holdTimer === null) {
+      holdTimer = setTimeout(() => { holdTimer = null; startMorphLoop(); },
+                             MORPH_HOLD_MS - waited);
+    }
+    return;
   }
-}, { threshold: 0 });
-observer.observe(document.querySelector('.chart-area'));
+
+  const step = () => {
+    const target = userScrolled ? targetMorph : 0;
+    const diff   = target - curMorph;
+    if (Math.abs(diff) < 0.002) {
+      curMorph = target;
+      paint(true);               // settling frame re-arms the hover targets
+      morphRaf = null;
+      return;
+    }
+    curMorph += diff * MORPH_EASE;
+    paint(false);
+    morphRaf = requestAnimationFrame(step);
+  };
+  morphRaf = requestAnimationFrame(step);
+}
+
+// ── BOOT ──────────────────────────────────────────────────────────────────────
+buildLegend();
+paint(false);
+window.addEventListener('resize', () => paint(true));
+
+if (prefersReducedMotion) {
+  // No motion: go straight to the finished chart.
+  barsRevealH = null; barLabelOp = 1; barsDone = true;
+  curMorph = 1; targetMorph = 1; userScrolled = true; hoverOn = true;
+  paint(true);
+} else {
+  // A real scroll gesture — not mere visibility — is what releases the line.
+  ['wheel', 'touchmove', 'keydown'].forEach(ev =>
+    window.addEventListener(ev, () => {
+      if (!userScrolled) { userScrolled = true; startMorphLoop(); }
+    }, { passive: true }));
+
+  const thresholds = Array.from({ length: 101 }, (_, i) => i / 100);
+  let firstObservation = true;
+
+  const observer = new IntersectionObserver(entries => {
+    const e = entries[entries.length - 1];
+    const p = progressFrom(e);
+    // Geometry changing after the first reading means the parent page scrolled.
+    if (!firstObservation && Math.abs(p - lastProgress) > 0.001) userScrolled = true;
+    firstObservation = false;
+    lastProgress = p;
+    targetMorph  = p;
+
+    if (!barsStarted && e.isIntersecting) {
+      barsStarted = true;
+      runBarGrow();
+    }
+    startMorphLoop();
+  }, { threshold: thresholds });
+
+  observer.observe(document.querySelector('.chart-area'));
+}
 </script>
 <script>
 /* Auto-height embed messaging (self-contained replacement for pym.js — NPR CDN retired) */
